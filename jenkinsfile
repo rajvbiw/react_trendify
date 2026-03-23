@@ -1,0 +1,65 @@
+pipeline {
+    agent any
+    environment {
+        TARGET_DIR = 'd:\\devops\\NEW_PROJECT_FILE\\Final Project\\react-cicd-eks-devops-pipeline-main'
+        IMAGE_NAME = 'rajbirari9737/trend-app'
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        CLUSTER_NAME = 'trend-eks-cluster'
+        AWS_REGION = 'us-east-1'
+    }
+    stages {
+        stage('Docker Build') {
+            steps {
+                dir("${env.TARGET_DIR}") {
+                    bat "docker build -t %IMAGE_NAME%:%IMAGE_TAG% ."
+                }
+            }
+        }
+        
+        stage('Docker login & push the image') {
+            steps {
+                dir("${env.TARGET_DIR}") {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhubcreadentials', passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
+                        bat "echo %DOCKER_PASSWORD%| docker login -u %DOCKER_USERNAME% --password-stdin"
+                        bat "docker push %IMAGE_NAME%:%IMAGE_TAG%"
+                    }
+                }
+            }
+        }
+
+        stage('Update Kubernetes YAML') {
+            steps {
+                dir("${env.TARGET_DIR}") {
+                    bat '''
+                    powershell -Command "(Get-Content trend-app.yml) -replace 'image: .*', 'image: %IMAGE_NAME%:%IMAGE_TAG%' | Set-Content trend-app.yml"
+                    '''
+                }
+            }
+        }
+        stage('Run Monitoring Stack (Docker Compose)') {
+            steps {
+                dir("${WORKSPACE}") {
+                    bat '''
+            docker compose down || exit 0
+            docker compose up -d --build
+            '''
+        }
+    }
+}
+        stage('Configure & Deploy to EKS') {
+            steps {
+                dir("${env.TARGET_DIR}") {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'AWScreadentials', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+                        bat '''
+                        aws eks update-kubeconfig --region %AWS_REGION% --name %CLUSTER_NAME%
+                        
+                        kubectl apply -f trend-app.yml
+                        kubectl apply -f trend-service.yml
+                        kubectl apply -f trend-ingress.yml
+                        '''
+                    }
+                }
+            }
+        }
+    }
+}
